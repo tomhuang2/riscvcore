@@ -1,5 +1,5 @@
-/* tomhuang 89284960 */
-
+/* tomhuang 89284960*/
+/* shahhali 88552608*/
 `timescale 1ns / 1ns
 
 // quotient = dividend / divisor
@@ -49,7 +49,7 @@ module DividerOneIter (
 );
   /*
     for (int i = 0; i < 32; i++) {
-        remainder = (remainder << 1) | ((dividend >> 31) & 0x1);
+       vscv;
         if (remainder < divisor) {
             quotient = (quotient << 1);
         } else {
