@@ -57,6 +57,53 @@ module CarryLookaheadAdder
    input wire         cin,
    output wire [31:0] sum);
 
-   // TODO: your code here
+   wire [31:0] g_gp1, p_gp1, carries;
+   wire [7:0] g_gp4, p_gp4;
+   wire g_gp8, p_gp8;
+   wire [6:0] carries_gp8;
 
+   assign carries[0] = cin;
+   
+   genvar i; 
+   generate
+      for (i = 0; i < 32; i++) begin
+         gp1 gp_one (
+            .a(a[i]),
+            .b(b[i]),
+            .g(g_gp1[i]),
+            .p(p_gp1[i])
+         );
+      end
+   endgenerate
+
+   generate
+      for (i = 0; i < 8; i++) begin
+         gp4 gp_four (
+            .gin(g_gp1[4*i+3:4*i]),
+            .pin(p_gp1[4*i+3:4*i]),
+            .cin(carries[4*i]),
+            .gout(g_gp4[i]),
+            .pout(p_gp4[i]),
+            .cout(carries[4*i+3:4*i+1])
+         );
+      end
+   endgenerate
+
+   gp8 gp_eight (
+      .gin(g_gp4),
+      .pin(p_gp4),
+      .cin(carries[0]),
+      .gout(g_gp8),
+      .pout(p_gp8),
+      .cout(carries_gp8)
+   );
+
+   //map carries_gp8 to carries
+   generate
+      for (i = 1; i < 8; i++) begin
+         assign carries[4*i] = carries_gp8[i-1];
+      end
+   endgenerate
+
+   assign sum = a ^ b ^ carries;
 endmodule
