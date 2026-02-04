@@ -25,9 +25,12 @@ module gp4(input wire [3:0] gin, pin,
            input wire cin,
            output wire gout, pout,
            output wire [2:0] cout);
-
-   // TODO: your code here
-
+   
+   assign pout = (& pin);
+   assign gout = gin[3] | (pin[3] & gin[2]) | (pin[3] & pin[2] & gin[1]) | ((& pin[3:1]) & gin[0]);
+   assign cout[0] = gin[0] | (pin[0] & cin);
+   assign cout[1] = gin[1] | (pin[1] & gin[0]) | (pin[1] & pin[0] & cin);
+   assign cout[2] = gin[2] | (pin[2] & gin[1]) | (pin[2] & pin[1] & gin[0] | ((& pin[2:0]) & cin));
 endmodule
 
 /** Same as gp4 but for an 8-bit window instead */
@@ -36,8 +39,17 @@ module gp8(input wire [7:0] gin, pin,
            output wire gout, pout,
            output wire [6:0] cout);
 
-   // TODO: your code here
+   assign pout = (& pin);
+   assign gout = gin[7] | (pin[7] & gin[6]) | ((& pin[7:6]) & gin[5]) | ((& pin[7:5]) & gin[4]) | ((& pin[7:4]) & gin[3]) | 
+   ((& pin[7:3]) & gin[2]) | ((& pin[7:2]) & gin[1]) | ((& pin[7:1]) & gin[0]);
 
+   assign cout[0] = gin[0] | (pin[0] & cin);
+   assign cout[1] = gin[1] | (pin[1] & gin[0]) | (pin[1] & pin[0] & cin);
+   assign cout[2] = gin[2] | (pin[2] & gin[1]) | (pin[2] & pin[1] & gin[0] | ((& pin[2:0]) & cin));
+   assign cout[3] = gin[3] | (pin[3] & gin[2]) | (pin[3] & pin[2] & gin[1]) | ((& pin[3:1]) & gin[0]) | ((& pin[3:0]) & cin);
+   assign cout[4] = gin[4] | (pin[4] & gin[3]) | ((& pin[4:3]) & gin[2]) | ((& pin[4:2]) & gin[1]) | ((& pin[4:1]) & gin[0]) | ((& pin[4:0]) & cin);
+   assign cout[5] = gin[5] | (pin[5] & gin[4]) | ((& pin[5:4]) & gin[3]) | ((& pin[5:3]) & gin[2]) | ((& pin[5:2]) & gin[1]) | ((& pin[5:1]) & gin[0]) | ((& pin[5:0]) & cin);
+   assign cout[6] = gin[6] | (pin[6] & gin[5]) | ((& pin[6:5]) & gin[4]) | ((& pin[6:4]) & gin[3]) | ((& pin[6:3]) & gin[2]) | ((& pin[6:2]) & gin[1]) | ((& pin[6:1]) & gin[0]) | ((& pin[6:0]) & cin);
 endmodule
 
 module CarryLookaheadAdder
