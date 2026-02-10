@@ -40,8 +40,8 @@ module RegFile (
     end
   end
 
-  assign rs1_data = (rs1 == 0) ? 0: regs[rs1];
-  assign rs2_data = (rs2 == 0) ? 0: regs[rs2];
+  assign rs1_data = regs[rs1];
+  assign rs2_data = regs[rs2];
 
 endmodule
 
