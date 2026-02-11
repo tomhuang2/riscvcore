@@ -231,21 +231,134 @@ module DatapathSingleCycle (
 
   logic illegal_insn;
 
-  always_comb begin
-    illegal_insn = 1'b0;
-    rf_we = 0; //write enable 
+  logic [`REG_SIZE] cla_result;
+  logic [`REG_SIZE] cla_operand_a;
+  logic [`REG_SIZE] cla_operand_b;
+  logic cla_carry_in;
 
-    case (insn_opcode)
-      OpLui: begin
-        // TODO: start here by implementing lui
-        rf_we = 1'b1;
-        rd_data = {insn_from_imem[31:12],12'b0};
-      end
-      default: begin
-        illegal_insn = 1'b1;
-      end
-    endcase
-  end
+  CarryLookaheadAdder cla (
+    .a(cla_operand_a), 
+    .b(cla_operand_b), 
+    .cin(cla_carry_in), 
+    .sum(cla_result)
+  );
+
+    always_comb begin
+      illegal_insn = 1'b0;
+      rf_we = 0; //write enable 
+
+      pcNext = pcCurrent + 4;
+      halt = 1'b0;
+      rd_data = 32'b0;
+
+      // defaults for CLA (it defaults to addi)
+      cla_operand_a = rs1_data;
+      cla_operand_b = imm_i_sext;
+      cla_carry_in = 1'b0;
+
+      case (insn_opcode)
+        OpLui: begin
+          // TODO: start here by implementing lui
+          rf_we = 1'b1;
+          rd_data = {insn_from_imem[31:12],12'b0};
+        end
+
+        OpRegImm: begin
+          // enable write
+          rf_we = 1'b1;
+          if (insn_addi) begin
+            rd_data = cla_result;
+          end else if (insn_slti) begin
+            rd_data = {31'b0, $signed(rs1_data) < $signed(imm_i_sext)};
+          end  else if (insn_sltiu) begin
+            rd_data = {31'b0, rs1_data < imm_i_sext};
+          end else if (insn_xori) begin
+            rd_data = rs1_data ^ imm_i_sext;
+          end else if (insn_ori) begin
+            rd_data = rs1_data | imm_i_sext;
+          end else if (insn_andi) begin
+            rd_data = rs1_data & imm_i_sext;
+          end else if (insn_slli) begin
+            rd_data = rs1_data << imm_shamt;
+          end else if (insn_srli) begin
+            rd_data = rs1_data >> imm_shamt;
+          end else if (insn_srai) begin
+            rd_data = $signed(rs1_data) >>> imm_shamt;
+          end
+        end
+
+        OpRegReg: begin
+          // enable write
+          rf_we = 1'b1;
+
+          if (insn_add) begin
+            cla_operand_b = rs2_data;
+            rd_data = cla_result;
+          end else if (insn_sub) begin
+            cla_operand_b = ~rs2_data;
+            cla_carry_in = 1'b1;
+            rd_data = cla_result;
+          end else if (insn_sll) begin
+            rd_data = rs1_data << rs2_data[4:0];
+          end else if (insn_slt) begin
+            rd_data = {31'b0, $signed(rs1_data) < $signed(rs2_data)};
+          end else if (insn_sltu) begin
+            rd_data = {31'b0, rs1_data < rs2_data};
+          end else if (insn_xor) begin
+            rd_data = rs1_data ^ rs2_data;
+          end else if (insn_srl) begin
+            rd_data = rs1_data >> rs2_data[4:0];
+          end else if (insn_sra) begin
+            rd_data = $signed(rs1_data) >>> rs2_data[4:0];
+          end else if (insn_or) begin
+            rd_data = rs1_data | rs2_data;
+          end else if (insn_and) begin
+            rd_data = rs1_data & rs2_data;
+          end
+        end
+
+        OpBranch: begin
+          if (insn_beq) begin
+            if (rs1_data == rs2_data) begin
+              pcNext = pcCurrent + imm_b_sext;
+            end
+          end else if (insn_bne) begin
+            if (rs1_data != rs2_data) begin
+                pcNext = pcCurrent + imm_b_sext;
+            end
+          end else if (insn_blt) begin
+            if ($signed(rs1_data) < $signed(rs2_data)) begin
+                pcNext = pcCurrent + imm_b_sext;
+            end
+          end else if (insn_bge) begin
+            if ($signed(rs1_data) >= $signed(rs2_data)) begin
+                pcNext = pcCurrent + imm_b_sext;
+            end
+          end else if (insn_bltu) begin
+            if (rs1_data < rs2_data) begin
+                pcNext = pcCurrent + imm_b_sext;
+            end  
+          end else if (insn_bgeu) begin
+            if (rs1_data >= rs2_data) begin
+                pcNext = pcCurrent + imm_b_sext;
+            end  
+          end
+        end
+
+        OpEnviron: begin
+          if (insn_ecall) begin
+            halt = 1'b1;
+          end
+        end
+        default: begin
+          illegal_insn = 1'b1;
+        end
+      endcase
+    end
+
+    assign trace_completed_pc = pcCurrent;
+    assign trace_completed_insn = insn_from_imem;
+    assign trace_completed_cycle_status = CYCLE_NO_STALL;
 
 endmodule
 
