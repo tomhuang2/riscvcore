@@ -510,7 +510,17 @@ module DatapathSingleCycle (
           end
         end
 
-        
+        OpJal: begin
+            rf_we = 1;
+            rd_data = pcCurrent + 4;
+            pcNext = pcCurrent + imm_j_sext;
+        end
+
+        OpJalr: begin
+          rf_we = 1;
+          rd_data = pcCurrent + 4;
+          pcNext = (rs1_data + imm_i_sext) & {{31{1'b1}},1'b0};
+        end
       
         default: begin
           illegal_insn = 1'b1;
