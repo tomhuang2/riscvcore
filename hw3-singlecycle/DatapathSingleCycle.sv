@@ -257,6 +257,9 @@ module DatapathSingleCycle (
       b = 8'b0;
       h = 16'b0;
 
+      store_data_to_dmem = 32'b0;
+      store_we_to_dmem = 4'b0;
+
       // defaults for CLA (it defaults to addi)
       cla_operand_a = rs1_data;
       cla_operand_b = imm_i_sext;
@@ -455,8 +458,60 @@ module DatapathSingleCycle (
           end
         end
 
-        
+        OpStore: begin
+          if (insn_sb) begin
+            cla_operand_a = rs1_data;
+            cla_operand_b = imm_s_sext;
+            addr_to_dmem = {cla_result[31:2],2'b0};
 
+            case (cla_result[1:0])
+              2'b00: begin
+                store_data_to_dmem[7:0] = rs2_data[7:0];
+                store_we_to_dmem = 4'b0001;
+              end 
+
+              2'b01: begin
+                store_data_to_dmem[15:8] = rs2_data[7:0];
+                store_we_to_dmem = 4'b0010;
+              end 
+
+              2'b10: begin
+                store_data_to_dmem[23:16] = rs2_data[7:0];
+                store_we_to_dmem = 4'b0100;
+              end 
+
+              2'b11: begin
+                store_data_to_dmem[31:24] = rs2_data[7:0];
+                store_we_to_dmem = 4'b1000;
+              end 
+            endcase
+          end else if (insn_sh) begin
+            cla_operand_a = rs1_data;
+            cla_operand_b = imm_s_sext;
+            addr_to_dmem = {cla_result[31:2],2'b0};
+
+            case (cla_result[1])
+              1'b0: begin
+                store_data_to_dmem[15:0] = rs2_data[15:0];
+                store_we_to_dmem = 4'b0011;
+              end 
+
+              1'b1: begin
+                store_data_to_dmem[31:16] = rs2_data[15:0];
+                store_we_to_dmem = 4'b1100;
+              end 
+            endcase
+          end else if (insn_sw) begin
+            cla_operand_a = rs1_data;
+            cla_operand_b = imm_s_sext;
+            addr_to_dmem = {cla_result[31:2],2'b0};
+            store_data_to_dmem[31:0] = rs2_data[31:0];
+            store_we_to_dmem = 4'b1111;
+          end
+        end
+
+        
+      
         default: begin
           illegal_insn = 1'b1;
         end
