@@ -227,7 +227,8 @@ module DatapathSingleCycle (
     .rs1(insn_rs1),
     .rs2(insn_rs2),
     .rs1_data(rs1_data),
-    .rs2_data(rs2_data));
+    .rs2_data(rs2_data)
+  );
 
   logic illegal_insn;
 
@@ -235,6 +236,8 @@ module DatapathSingleCycle (
   logic [`REG_SIZE] cla_operand_a;
   logic [`REG_SIZE] cla_operand_b;
   logic cla_carry_in;
+  logic [7:0] b;
+  logic [15:0] h;
 
   CarryLookaheadAdder cla (
     .a(cla_operand_a), 
@@ -250,6 +253,9 @@ module DatapathSingleCycle (
       pcNext = pcCurrent + 4;
       halt = 1'b0;
       rd_data = 32'b0;
+      addr_to_dmem = 32'b0;
+      b = 8'b0;
+      h = 16'b0;
 
       // defaults for CLA (it defaults to addi)
       cla_operand_a = rs1_data;
@@ -350,6 +356,107 @@ module DatapathSingleCycle (
             halt = 1'b1;
           end
         end
+
+        OpAuipc: begin
+          rf_we = 1'b1;
+          rd_data = pcCurrent + {insn_from_imem[31:12],12'b0};
+        end
+
+        OpLoad: begin 
+          rf_we = 1'b1;
+          
+          if (insn_lb) begin
+            cla_operand_a = rs1_data;
+            cla_operand_b = imm_i_sext;
+            addr_to_dmem = {cla_result[31:2],2'b0};
+
+            case (cla_result[1:0])
+              2'b00: begin
+                b = load_data_from_dmem[7:0];
+              end
+
+              2'b01: begin
+                b = load_data_from_dmem[15:8];
+              end
+
+              2'b10: begin
+                b = load_data_from_dmem[23:16];
+              end
+
+              2'b11: begin
+                b = load_data_from_dmem[31:24];
+              end
+            endcase
+
+            rd_data = {{24{b[7]}},b};
+
+          end else if(insn_lbu) begin
+            cla_operand_a = rs1_data;
+            cla_operand_b = imm_i_sext;
+            addr_to_dmem = {cla_result[31:2],2'b0};
+
+            case (cla_result[1:0])
+              2'b00: begin
+                b = load_data_from_dmem[7:0];
+              end
+
+              2'b01: begin
+                b = load_data_from_dmem[15:8];
+              end
+
+              2'b10: begin
+                b = load_data_from_dmem[23:16];
+              end
+
+              2'b11: begin
+                b = load_data_from_dmem[31:24];
+              end
+            endcase
+
+            rd_data = {{24{1'b0}},b};
+
+          end else if (insn_lh) begin
+            cla_operand_a = rs1_data;
+            cla_operand_b = imm_i_sext;
+            addr_to_dmem = {cla_result[31:2],2'b0};
+
+            case (cla_result[1])
+              1'b0: begin
+                h = load_data_from_dmem[15:0];
+              end
+
+              1'b1: begin
+                h = load_data_from_dmem[31:16];
+              end
+            endcase
+
+            rd_data = {{16{h[15]}},h};
+          end else if (insn_lhu) begin
+            cla_operand_a = rs1_data;
+            cla_operand_b = imm_i_sext;
+            addr_to_dmem = {cla_result[31:2],2'b0};
+
+            case (cla_result[1])
+              1'b0: begin
+                h = load_data_from_dmem[15:0];
+              end
+
+              1'b1: begin
+                h = load_data_from_dmem[31:16];
+              end
+            endcase
+
+            rd_data = {{16{1'b0}},h};
+          end else if (insn_lw) begin
+            cla_operand_a = rs1_data;
+            cla_operand_b = imm_i_sext;
+            addr_to_dmem = {cla_result[31:2],2'b0};
+            rd_data = load_data_from_dmem;
+          end
+        end
+
+        
+
         default: begin
           illegal_insn = 1'b1;
         end
