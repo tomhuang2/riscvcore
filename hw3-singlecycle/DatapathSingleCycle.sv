@@ -239,6 +239,8 @@ module DatapathSingleCycle (
   logic [7:0] b;
   logic [15:0] h;
   logic [63:0] prod; 
+  logic [31:0] div_a;
+  logic [31:0] div_b;
 
   logic [`REG_SIZE] div_dividend;
   logic [`REG_SIZE] div_divisor;
@@ -278,6 +280,12 @@ module DatapathSingleCycle (
       cla_operand_a = rs1_data;
       cla_operand_b = imm_i_sext;
       cla_carry_in = 1'b0;
+
+      //defaults for DIV
+      div_dividend = 32'b0;
+      div_divisor = 32'b0;
+      div_a = 32'b0;
+      div_b = 32'b0;
 
       case (insn_opcode)
         OpLui: begin
@@ -349,6 +357,50 @@ module DatapathSingleCycle (
           end else if (insn_mulhu) begin
             prod = $unsigned(rs1_data) * $unsigned(rs2_data);
             rd_data = prod[63:32];
+          end else if (insn_div) begin
+            if (rs2_data == 32'b0) begin 
+              rd_data = 32'hFFFFFFFF;
+            end else if (rs1_data == 32'h80000000 && rs2_data == 32'hFFFFFFFF) begin
+              rd_data = 32'h80000000;
+            end else begin
+              div_a = rs1_data[31] ? (~rs1_data + 1) : rs1_data;
+              div_b = rs2_data[31] ? (~rs2_data + 1) : rs2_data;
+
+              div_dividend = div_a;
+              div_divisor = div_b;
+
+              if (rs1_data[31] != rs2_data[31]) begin
+                rd_data = ~div_quotient + 1;
+              end else begin
+                rd_data = div_quotient;
+              end
+            end
+          end else if (insn_divu) begin
+            div_dividend = rs1_data;
+            div_divisor = $unsigned(rs2_data);
+            rd_data = div_quotient;
+          end else if (insn_rem) begin
+            if (rs2_data == 32'b0) begin 
+              rd_data = rs1_data;
+            end else if (rs1_data == 32'h80000000 && rs2_data == 32'hFFFFFFFF) begin
+              rd_data = 0;
+            end else begin
+              div_a = rs1_data[31] ? (~rs1_data + 1) : rs1_data;
+              div_b = rs2_data[31] ? (~rs2_data + 1) : rs2_data;
+
+              div_dividend = div_a;
+              div_divisor = div_b;
+
+              if (rs1_data[31]) begin
+                rd_data = ~div_remainder + 1;
+              end else begin
+                rd_data = div_remainder;
+              end
+            end
+          end else if (insn_remu) begin
+            div_dividend = rs1_data;
+            div_divisor = $unsigned(rs2_data);
+            rd_data = div_remainder;
           end
         end
 
