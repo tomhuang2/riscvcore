@@ -238,12 +238,25 @@ module DatapathSingleCycle (
   logic cla_carry_in;
   logic [7:0] b;
   logic [15:0] h;
+  logic [63:0] prod; 
+
+  logic [`REG_SIZE] div_dividend;
+  logic [`REG_SIZE] div_divisor;
+  logic [`REG_SIZE] div_remainder;
+  logic [`REG_SIZE] div_quotient;
 
   CarryLookaheadAdder cla (
     .a(cla_operand_a), 
     .b(cla_operand_b), 
     .cin(cla_carry_in), 
     .sum(cla_result)
+  );
+
+  DividerUnsigned div (
+    .i_dividend(div_dividend),
+    .i_divisor(div_divisor),
+    .o_remainder(div_remainder),
+    .o_quotient(div_quotient)
   );
 
     always_comb begin
@@ -256,6 +269,7 @@ module DatapathSingleCycle (
       addr_to_dmem = 32'b0;
       b = 8'b0;
       h = 16'b0;
+      prod = 64'b0;
 
       store_data_to_dmem = 32'b0;
       store_we_to_dmem = 4'b0;
@@ -323,6 +337,18 @@ module DatapathSingleCycle (
             rd_data = rs1_data | rs2_data;
           end else if (insn_and) begin
             rd_data = rs1_data & rs2_data;
+          end else if (insn_mul) begin
+            prod = rs1_data * rs2_data;
+            rd_data = prod[31:0];
+          end else if (insn_mulh) begin
+            prod = $signed(rs1_data) * $signed(rs2_data);
+            rd_data = prod[63:32];
+          end else if (insn_mulhsu) begin
+            prod = $signed({{32{rs1_data[31]}},rs1_data}) * $signed({32'b0,rs2_data});
+            rd_data = prod[63:32];
+          end else if (insn_mulhu) begin
+            prod = $unsigned(rs1_data) * $unsigned(rs2_data);
+            rd_data = prod[63:32];
           end
         end
 
