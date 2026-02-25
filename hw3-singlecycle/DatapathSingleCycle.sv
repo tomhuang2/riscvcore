@@ -445,12 +445,11 @@ module DatapathSingleCycle (
 
         OpLoad: begin 
           rf_we = 1'b1;
-          
-          if (insn_lb) begin
-            cla_operand_a = rs1_data;
-            cla_operand_b = imm_i_sext;
-            addr_to_dmem = {cla_result[31:2],2'b0};
+          cla_operand_a = rs1_data;
+          cla_operand_b = imm_i_sext;
+          addr_to_dmem = {cla_result[31:2],2'b0};
 
+          if (insn_lb) begin
             case (cla_result[1:0])
               2'b00: begin
                 b = load_data_from_dmem[7:0];
@@ -472,10 +471,6 @@ module DatapathSingleCycle (
             rd_data = {{24{b[7]}},b};
 
           end else if(insn_lbu) begin
-            cla_operand_a = rs1_data;
-            cla_operand_b = imm_i_sext;
-            addr_to_dmem = {cla_result[31:2],2'b0};
-
             case (cla_result[1:0])
               2'b00: begin
                 b = load_data_from_dmem[7:0];
@@ -497,10 +492,6 @@ module DatapathSingleCycle (
             rd_data = {{24{1'b0}},b};
 
           end else if (insn_lh) begin
-            cla_operand_a = rs1_data;
-            cla_operand_b = imm_i_sext;
-            addr_to_dmem = {cla_result[31:2],2'b0};
-
             case (cla_result[1])
               1'b0: begin
                 h = load_data_from_dmem[15:0];
@@ -513,10 +504,6 @@ module DatapathSingleCycle (
 
             rd_data = {{16{h[15]}},h};
           end else if (insn_lhu) begin
-            cla_operand_a = rs1_data;
-            cla_operand_b = imm_i_sext;
-            addr_to_dmem = {cla_result[31:2],2'b0};
-
             case (cla_result[1])
               1'b0: begin
                 h = load_data_from_dmem[15:0];
@@ -529,19 +516,16 @@ module DatapathSingleCycle (
 
             rd_data = {{16{1'b0}},h};
           end else if (insn_lw) begin
-            cla_operand_a = rs1_data;
-            cla_operand_b = imm_i_sext;
-            addr_to_dmem = {cla_result[31:2],2'b0};
             rd_data = load_data_from_dmem;
           end
         end
 
         OpStore: begin
-          if (insn_sb) begin
-            cla_operand_a = rs1_data;
-            cla_operand_b = imm_s_sext;
-            addr_to_dmem = {cla_result[31:2],2'b0};
+          cla_operand_a = rs1_data;
+          cla_operand_b = imm_s_sext;
+          addr_to_dmem = {cla_result[31:2],2'b0};
 
+          if (insn_sb) begin
             case (cla_result[1:0])
               2'b00: begin
                 store_data_to_dmem[7:0] = rs2_data[7:0];
@@ -564,10 +548,6 @@ module DatapathSingleCycle (
               end 
             endcase
           end else if (insn_sh) begin
-            cla_operand_a = rs1_data;
-            cla_operand_b = imm_s_sext;
-            addr_to_dmem = {cla_result[31:2],2'b0};
-
             case (cla_result[1])
               1'b0: begin
                 store_data_to_dmem[15:0] = rs2_data[15:0];
@@ -580,9 +560,6 @@ module DatapathSingleCycle (
               end 
             endcase
           end else if (insn_sw) begin
-            cla_operand_a = rs1_data;
-            cla_operand_b = imm_s_sext;
-            addr_to_dmem = {cla_result[31:2],2'b0};
             store_data_to_dmem[31:0] = rs2_data[31:0];
             store_we_to_dmem = 4'b1111;
           end
