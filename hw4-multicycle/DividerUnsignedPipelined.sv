@@ -30,10 +30,10 @@ module DividerUnsignedPipelined (
     generate 
         for (i = 0; i < 32; i++) begin
             divu_1iter d (
-                .i_dividend((i % 4 == 0 && i != 0) ? dividend_reg[i/4-1] : dividend_bus[i]),
+                .i_dividend(((i & 3) == 0 && i != 0) ? dividend_reg[i/4-1] : dividend_bus[i]),
                 .i_divisor((i >= 4) ? divisor_reg[i/4-1] : i_divisor),
-                .i_remainder((i % 4 == 0 && i != 0) ? remainder_reg[i/4-1] : remainder_bus[i]),
-                .i_quotient((i % 4 == 0 && i != 0) ? quotient_reg[i/4-1] : quotient_bus[i]),
+                .i_remainder(((i & 3) == 0 && i != 0) ? remainder_reg[i/4-1] : remainder_bus[i]),
+                .i_quotient(((i & 3) == 0 && i != 0) ? quotient_reg[i/4-1] : quotient_bus[i]),
                 .o_dividend(dividend_bus[i+1]),
                 .o_remainder(remainder_bus[i+1]),
                 .o_quotient(quotient_bus[i+1])
