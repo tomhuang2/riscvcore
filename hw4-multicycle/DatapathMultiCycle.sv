@@ -211,6 +211,18 @@ module DatapathMultiCycle (
     end
   end
 
+  wire is_div = insn_div || insn_divu || insn_rem || insn_remu;
+
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      div_counter <= 0;
+    end else if (is_div) begin
+      div_counter <= (div_counter == 4'd8) ? 4'd0 : div_counter + 1;
+    end else begin
+      div_counter <= 0;
+    end
+  end
+
   // NOTE: don't rename your RegFile instance as the tests expect it to be `rf`
   // TODO: you will need to edit the port connections, however.
   wire [`REG_SIZE] rs1_data;
@@ -247,6 +259,7 @@ module DatapathMultiCycle (
   logic [`REG_SIZE] div_divisor;
   logic [`REG_SIZE] div_remainder;
   logic [`REG_SIZE] div_quotient;
+  logic [3:0] div_counter;
 
   CarryLookaheadAdder cla (
     .a(cla_operand_a), 
@@ -585,11 +598,16 @@ module DatapathMultiCycle (
           illegal_insn = 1'b1;
         end
       endcase
+      // stall for div to complete
+      if (is_div && div_counter != 4'd8) begin
+        pcNext = pcCurrent;
+        rf_we = 1'b0;
+      end
     end
 
     assign trace_completed_pc = pcCurrent;
     assign trace_completed_insn = insn_from_imem;
-    assign trace_completed_cycle_status = CYCLE_NO_STALL;
+    assign trace_completed_cycle_status = (is_div && div_counter != 4'd8) ? CYCLE_DIV : CYCLE_NO_STALL;
 
 endmodule
 
