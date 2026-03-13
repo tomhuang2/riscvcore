@@ -17,10 +17,10 @@ module DividerUnsignedPipelined (
     wire [31:0] dividend_bus [0:32];
     wire [31:0] remainder_bus [0:32];
 
-    logic [31:0] quotient_reg [0:7];
-    logic [31:0] dividend_reg [0:7];
-    logic [31:0] remainder_reg [0:7];
-    logic [31:0] divisor_reg [0:7];
+    logic [31:0] quotient_reg [0:6];
+    logic [31:0] dividend_reg [0:6];
+    logic [31:0] remainder_reg [0:6];
+    logic [31:0] divisor_reg [0:6];
 
     assign remainder_bus[0] = 32'd0;
     assign quotient_bus[0] = 32'd0;
@@ -31,7 +31,7 @@ module DividerUnsignedPipelined (
         for (i = 0; i < 32; i++) begin
             divu_1iter d (
                 .i_dividend((i % 4 == 0 && i != 0) ? dividend_reg[i/4-1] : dividend_bus[i]),
-                .i_divisor((i % 4 == 0 && i != 0) ? divisor_reg[i/4-1] : i_divisor),
+                .i_divisor((i >= 4) ? divisor_reg[i/4-1] : i_divisor),
                 .i_remainder((i % 4 == 0 && i != 0) ? remainder_reg[i/4-1] : remainder_bus[i]),
                 .i_quotient((i % 4 == 0 && i != 0) ? quotient_reg[i/4-1] : quotient_bus[i]),
                 .o_dividend(dividend_bus[i+1]),
@@ -43,14 +43,14 @@ module DividerUnsignedPipelined (
 
     always_ff @(posedge clk) begin
         if (rst) begin
-            for (int r = 0; r < 8; r++) begin
+            for (int r = 0; r < 7; r++) begin
                 quotient_reg[r] <= 0;
                 dividend_reg[r] <= 0;
                 divisor_reg[r] <= 0;
                 remainder_reg[r] <= 0;
             end
         end else begin
-            for (int r = 0; r < 8; r++) begin
+            for (int r = 0; r < 7; r++) begin
                 dividend_reg[r]  <= dividend_bus[(r+1)*4];
                 remainder_reg[r] <= remainder_bus[(r+1)*4];
                 quotient_reg[r]  <= quotient_bus[(r+1)*4];
@@ -59,8 +59,8 @@ module DividerUnsignedPipelined (
         end
     end
 
-    assign o_remainder = remainder_reg[7];
-    assign o_quotient = quotient_reg[7];
+    assign o_remainder = remainder_bus[32];
+    assign o_quotient = quotient_bus[32];
 
 endmodule
 
