@@ -122,10 +122,15 @@ module CarryLookaheadAdder (
 	wire g_gp8;
 	wire p_gp8;
 	wire [6:0] carries_gp8;
-	assign carries[0] = cin;
+	wire [7:0] cin4;
+	assign cin4[0] = cin;
 	genvar _gv_i_1;
 	generate
-		for (_gv_i_1 = 0; _gv_i_1 < 32; _gv_i_1 = _gv_i_1 + 1) begin : genblk1
+		for (_gv_i_1 = 1; _gv_i_1 < 8; _gv_i_1 = _gv_i_1 + 1) begin : genblk1
+			localparam i = _gv_i_1;
+			assign cin4[i] = carries_gp8[i - 1];
+		end
+		for (_gv_i_1 = 0; _gv_i_1 < 32; _gv_i_1 = _gv_i_1 + 1) begin : genblk2
 			localparam i = _gv_i_1;
 			gp1 gp_one(
 				.a(a[i]),
@@ -134,12 +139,12 @@ module CarryLookaheadAdder (
 				.p(p_gp1[i])
 			);
 		end
-		for (_gv_i_1 = 0; _gv_i_1 < 8; _gv_i_1 = _gv_i_1 + 1) begin : genblk2
+		for (_gv_i_1 = 0; _gv_i_1 < 8; _gv_i_1 = _gv_i_1 + 1) begin : genblk3
 			localparam i = _gv_i_1;
 			gp4 gp_four(
 				.gin(g_gp1[(4 * i) + 3:4 * i]),
 				.pin(p_gp1[(4 * i) + 3:4 * i]),
-				.cin(carries[4 * i]),
+				.cin(cin4[i]),
 				.gout(g_gp4[i]),
 				.pout(p_gp4[i]),
 				.cout(carries[(4 * i) + 3:(4 * i) + 1])
@@ -149,15 +154,15 @@ module CarryLookaheadAdder (
 	gp8 gp_eight(
 		.gin(g_gp4),
 		.pin(p_gp4),
-		.cin(carries[0]),
+		.cin(cin),
 		.gout(g_gp8),
 		.pout(p_gp8),
 		.cout(carries_gp8)
 	);
 	generate
-		for (_gv_i_1 = 1; _gv_i_1 < 8; _gv_i_1 = _gv_i_1 + 1) begin : genblk3
+		for (_gv_i_1 = 0; _gv_i_1 < 8; _gv_i_1 = _gv_i_1 + 1) begin : genblk4
 			localparam i = _gv_i_1;
-			assign carries[4 * i] = carries_gp8[i - 1];
+			assign carries[4 * i] = cin4[i];
 		end
 	endgenerate
 	assign sum = (a ^ b) ^ carries;
@@ -244,11 +249,10 @@ module divu_1iter (
 	output wire [31:0] o_remainder;
 	output wire [31:0] o_quotient;
 	wire [31:0] remainder;
-	wire status;
 	assign remainder = {i_remainder[30:0], i_dividend[31]};
-	assign status = remainder < i_divisor;
-	assign o_quotient = (status ? i_quotient << 1 : (i_quotient << 1) | 32'b00000000000000000000000000000001);
-	assign o_remainder = (status ? remainder : remainder - i_divisor);
+	wire [32:0] status = {1'b0, remainder} - {1'b0, i_divisor};
+	assign o_quotient = (status[32] ? i_quotient << 1 : (i_quotient << 1) | 32'b00000000000000000000000000000001);
+	assign o_remainder = (status[32] ? remainder : status[31:0]);
 	assign o_dividend = i_dividend << 1;
 endmodule
 module RegFile (

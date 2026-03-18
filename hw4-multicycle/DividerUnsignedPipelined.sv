@@ -76,14 +76,13 @@ module divu_1iter (
 );
 
     wire [31:0] remainder;
-    wire status;
-
     assign remainder = {i_remainder[30:0],i_dividend[31]};
 
-    assign status = (remainder < i_divisor);
-    assign o_quotient = status ? (i_quotient << 1) : ((i_quotient << 1) | 32'b1);
-    assign o_remainder = status ? remainder : (remainder - i_divisor);
+    wire [32:0] status = {1'b0,remainder} - {1'b0, i_divisor};
 
+    // assign status = (remainder < i_divisor);
+    assign o_quotient = status[32] ? (i_quotient << 1) : ((i_quotient << 1) | 32'b1);
+    assign o_remainder = status[32] ? remainder : status[31:0];
     assign o_dividend = i_dividend << 1;
 
 endmodule
