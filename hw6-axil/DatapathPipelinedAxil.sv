@@ -19,10 +19,10 @@
 `ifndef SYNTHESIS
   `include "../hw3-singlecycle/RvDisassembler.sv"
 `endif
-`include "../hw2b-cla/cla.sv"
+`include "../hw2b-cla/CarryLookaheadAdder.sv"
+`include "../hw3-singlecycle/cycle_status.sv"
 `include "../hw4-multicycle/DividerUnsignedPipelined.sv"
-`include "../hw5-pipelined/cycle_status.sv"
-`include "AxilCache.sv"
+`include "EasyAxilMemory.sv"
 
 module Disasm #(
     PREFIX = "D"
@@ -52,23 +52,23 @@ endmodule
 
 // TODO: copy over your RegFile and pipeline structs from HW5
 
-module DatapathPipelinedCache (
+module DatapathPipelinedAxil (
     input wire clk,
     input wire rst,
 
-    // AXIL interface to insn memory
-    axi_if.manager icache,
-    // AXIL interface to data memory/cache
-    axi_if.manager dcache,
+    // interface to insn memory/cache
+    axil_if.manager imem,
+    // interface to data memory/cache
+    axil_if.manager dmem,
 
     output logic halt,
 
     // The PC of the insn currently in Writeback. 0 if not a valid insn.
-    output logic [`REG_SIZE] trace_writeback_pc,
+    output logic [`REG_SIZE] trace_completed_pc,
     // The bits of the insn currently in Writeback. 0 if not a valid insn.
-    output logic [`INSN_SIZE] trace_writeback_insn,
+    output logic [`INSN_SIZE] trace_completed_insn,
     // The status of the insn (or stall) currently in Writeback. See the cycle_status.sv file for valid values.
-    output cycle_status_e trace_writeback_cycle_status
+    output cycle_status_e trace_completed_cycle_status
 );
 
   localparam bit True = 1'b1;
@@ -88,70 +88,43 @@ module DatapathPipelinedCache (
 
 endmodule // DatapathPipelinedCache
 
+/* This design has just one clock for both processor and memory. */
 module Processor (
-    input wire                       clk,
-    input wire                       rst,
-    output logic                     halt,
-    output wire [`REG_SIZE]          trace_writeback_pc,
-    output wire [`INSN_SIZE]         trace_writeback_insn,
-    output                           cycle_status_e trace_writeback_cycle_status
+    input  wire  clk,
+    input  wire  rst,
+    output logic halt,
+    output wire [`REG_SIZE] trace_completed_pc,
+    output wire [`INSN_SIZE] trace_completed_insn,
+    output cycle_status_e trace_completed_cycle_status
 );
 
   // This wire is set by cocotb to the name of the currently-running test, to make it easier
   // to see what is going on in the waveforms.
   wire [(8*32)-1:0] test_case;
 
-  axi_if axi_data_cache ();
-  axi_if axi_insn_cache ();
-  // memory is dual-ported, to connect to both I$ and D$
-  axi_if axi_mem_ro ();
-  axi_if axi_mem_rw ();
+  axil_if axil_mem_ro ();
+  axil_if axil_mem_rw ();
 
-AxilMemory #(.NUM_WORDS(8192)) memory (
-  .ACLK(clk),
-  .ARESETn(~rst),
-  .port_ro(axi_mem_ro.subord),
-  .port_rw(axi_mem_rw.subord)
-);
-
-`ifdef ENABLE_INSN_CACHE
-  AxilCache #(
-    .BLOCK_SIZE_BITS(32),
-    .NUM_SETS(16)) icache (
-    .ACLK(clk),
-    .ARESETn(~rst),
-    .proc(axi_insn_cache.subord),
-    .mem(axi_mem_ro.manager)
+  EasyAxilMemory #(
+      .OPT_SKIDBUFFER(1),
+      .OPT_LOWPOWER(0),
+      .NUM_WORDS(8192)
+  ) memory (
+      .ACLK(clk),
+      .ARESETn(~rst),
+      .port_ro(axil_mem_ro.subord),
+      .port_rw(axil_mem_rw.subord)
   );
-`endif
-`ifdef ENABLE_DATA_CACHE
-  AxilCache #(
-    .BLOCK_SIZE_BITS(32),
-    .NUM_SETS(16)) dcache (
-    .ACLK(clk),
-    .ARESETn(~rst),
-    .proc(axi_data_cache.subord),
-    .mem(axi_mem_rw.manager)
-  );
-`endif
 
-  DatapathPipelinedCache datapath (
+  DatapathPipelinedAxil datapath (
       .clk(clk),
       .rst(rst),
-`ifdef ENABLE_INSN_CACHE
-      .icache(axi_insn_cache.manager),
-`else
-      .icache(axi_mem_ro.manager),
-`endif
-`ifdef ENABLE_DATA_CACHE
-      .dcache(axi_data_cache.manager),
-`else
-      .dcache(axi_mem_rw.manager),
-`endif
+      .imem(axil_mem_ro.manager),
+      .dmem(axil_mem_rw.manager),
       .halt(halt),
-      .trace_writeback_pc(trace_writeback_pc),
-      .trace_writeback_insn(trace_writeback_insn),
-      .trace_writeback_cycle_status(trace_writeback_cycle_status)
+      .trace_completed_pc(trace_completed_pc),
+      .trace_completed_insn(trace_completed_insn),
+      .trace_completed_cycle_status(trace_completed_cycle_status)
   );
 
 endmodule
