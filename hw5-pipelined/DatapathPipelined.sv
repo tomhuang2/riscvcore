@@ -144,6 +144,8 @@ module DatapathPipelined (
       f_pc_current   <= 32'd0;
       // NB: use CYCLE_NO_STALL since this is the value that will persist after the last reset cycle
       f_cycle_status <= CYCLE_NO_STALL;
+    end else if (load_use_stall) begin //do not move program counter at stall
+      
     end else begin
       f_cycle_status <= CYCLE_NO_STALL;
       f_pc_current   <= branch_taken ? branch_target : f_pc_current + 4;
@@ -174,6 +176,8 @@ module DatapathPipelined (
       decode_state <= '{pc: 0, insn: 0, cycle_status: CYCLE_RESET};
     end else if (branch_taken) begin
       decode_state <= '{default: 0, cycle_status: CYCLE_TAKEN_BRANCH};
+    end else if (load_use_stall) begin //do not update on load use stall
+
     end else begin
       begin
         decode_state <= '{pc: f_pc_current, insn: f_insn, cycle_status: f_cycle_status};
@@ -244,6 +248,8 @@ module DatapathPipelined (
 
   wire [`REG_SIZE] rs1_data_wd = (writeback_state.we && writeback_state.rd != 0 && writeback_state.rd == insn_rs1) ? writeback_state.rd_data : rs1_data; //WD bypass
   wire [`REG_SIZE] rs2_data_wd = (writeback_state.we && writeback_state.rd != 0 && writeback_state.rd == insn_rs2) ? writeback_state.rd_data : rs2_data;
+  
+  wire load_use_stall = (execute_state.insn[6:0] == OpLoad) && (execute_state.rd != 0) && (execute_state.rd == insn_rs2 || ((execute_state.rd == insn_rs1) && insn_opcode != OpStore)); 
 
   /****************/
   /*EXECUTE STAGE**/
@@ -270,6 +276,8 @@ module DatapathPipelined (
       execute_state <= '{default: 0, cycle_status: CYCLE_RESET};
     end else if (branch_taken) begin
       execute_state <= '{default: 0, cycle_status: CYCLE_TAKEN_BRANCH};
+    end else if (load_use_stall) begin
+      execute_state <= '{default: 0, cycle_status: CYCLE_LOAD2USE};
     end else begin
       execute_state <= '{
           pc: decode_state.pc,
@@ -418,13 +426,7 @@ module DatapathPipelined (
     alu_result = 32'b0;
     branch_taken = 1'b0;
     branch_target = 32'b0;
-    addr_to_dmem = 32'b0;
-    b = 8'b0;
-    h = 16'b0;
     prod = 64'b0;
-
-    store_data_to_dmem = 32'b0;
-    store_we_to_dmem = 4'b0;
 
     // defaults for CLA (it defaults to addi)
     cla_operand_a = x_rs1_data;
@@ -597,11 +599,16 @@ module DatapathPipelined (
       end
 
       OpLoad: begin
-        // milestone 2
+        insn_writes_rd = 1'b1;
+        cla_operand_a = x_rs1_data;
+        cla_operand_b = execute_state.imm_i_sext;
+        alu_result = cla_result;
       end
 
       OpStore: begin
-        // milestone 2
+        cla_operand_a = x_rs1_data;
+        cla_operand_b = execute_state.imm_s_sext;
+        alu_result = cla_result;
       end
 
       OpJal: begin
@@ -632,7 +639,10 @@ module DatapathPipelined (
     logic [`REG_SIZE] pc;
     logic [`INSN_SIZE] insn;
     logic [`REG_SIZE] rd_data;
+    logic [`REG_SIZE] rs2_data;
+    logic [`REG_SIZE] addr;
     logic [4:0] rd;
+    logic [1:0] byte_offset;
     logic we;
     cycle_status_e cycle_status;
   } stage_memory_t;
@@ -647,7 +657,10 @@ module DatapathPipelined (
           pc: execute_state.pc,
           insn: execute_state.insn,
           rd_data: alu_result,
+          rs2_data: x_rs2_data,
+          addr: {alu_result[31:2], 2'b0},
           rd: execute_state.rd,
+          byte_offset: alu_result[1:0],
           we: insn_writes_rd,
           cycle_status: execute_state.cycle_status
       };
@@ -661,6 +674,160 @@ module DatapathPipelined (
       .insn  (memory_state.insn),
       .disasm(m_disasm)
   );
+
+  wire [6:0] m_insn_funct7;
+  wire [4:0] m_insn_rs2;
+  wire [4:0] m_insn_rs1;
+  wire [2:0] m_insn_funct3;
+  wire [4:0] m_insn_rd;
+  wire [`OPCODE_SIZE] m_insn_opcode;
+
+  assign {m_insn_funct7, m_insn_rs2, m_insn_rs1, m_insn_funct3, m_insn_rd, m_insn_opcode} = memory_state.insn;
+
+  wire m_insn_lb = m_insn_opcode == OpLoad && memory_state.insn[14:12] == 3'b000;
+  wire m_insn_lh = m_insn_opcode == OpLoad && memory_state.insn[14:12] == 3'b001;
+  wire m_insn_lw = m_insn_opcode == OpLoad && memory_state.insn[14:12] == 3'b010;
+  wire m_insn_lbu = m_insn_opcode == OpLoad && memory_state.insn[14:12] == 3'b100;
+  wire m_insn_lhu = m_insn_opcode == OpLoad && memory_state.insn[14:12] == 3'b101;
+
+  wire m_insn_sb = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b000;
+  wire m_insn_sh = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b001;
+  wire m_insn_sw = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b010;
+
+  wire is_writeback_load = (writeback_state.insn[6:0] == OpLoad);
+  wire [`REG_SIZE] m_store_data = (is_writeback_load && writeback_state.rd != 0 && writeback_state.rd == m_insn_rs2) ? writeback_state.rd_data : memory_state.rs2_data; //WM bypass
+  logic  [`REG_SIZE] m_load_data;
+
+  always_comb begin
+    addr_to_dmem = memory_state.addr;
+    b = 8'b0;
+    h = 16'b0;
+    store_data_to_dmem = 32'b0;
+    store_we_to_dmem = 4'b0;
+    m_load_data = 32'b0;
+
+    case (m_insn_opcode)
+     OpLoad: begin 
+          if (m_insn_lb) begin
+            case (memory_state.byte_offset[1:0])
+              2'b00: begin
+                b = load_data_from_dmem[7:0];
+              end
+
+              2'b01: begin
+                b = load_data_from_dmem[15:8];
+              end
+
+              2'b10: begin
+                b = load_data_from_dmem[23:16];
+              end
+
+              2'b11: begin
+                b = load_data_from_dmem[31:24];
+              end
+            endcase
+
+            m_load_data = {{24{b[7]}},b};
+
+          end else if(m_insn_lbu) begin
+            case (memory_state.byte_offset[1:0])
+              2'b00: begin
+                b = load_data_from_dmem[7:0];
+              end
+
+              2'b01: begin
+                b = load_data_from_dmem[15:8];
+              end
+
+              2'b10: begin
+                b = load_data_from_dmem[23:16];
+              end
+
+              2'b11: begin
+                b = load_data_from_dmem[31:24];
+              end
+            endcase
+
+            m_load_data = {{24{1'b0}},b};
+
+          end else if (m_insn_lh) begin
+            case (memory_state.byte_offset[1])
+              1'b0: begin
+                h = load_data_from_dmem[15:0];
+              end
+
+              1'b1: begin
+                h = load_data_from_dmem[31:16];
+              end
+            endcase
+
+            m_load_data = {{16{h[15]}},h};
+          end else if (m_insn_lhu) begin
+            case (memory_state.byte_offset[1])
+              1'b0: begin
+                h = load_data_from_dmem[15:0];
+              end
+
+              1'b1: begin
+                h = load_data_from_dmem[31:16];
+              end
+            endcase
+
+            m_load_data = {{16{1'b0}},h};
+          end else if (m_insn_lw) begin
+            m_load_data = load_data_from_dmem;
+          end
+
+
+        end
+
+        OpStore: begin
+          if (m_insn_sb) begin
+            case (memory_state.byte_offset[1:0])
+              2'b00: begin
+                store_data_to_dmem[7:0] = m_store_data[7:0];
+                store_we_to_dmem = 4'b0001;
+              end 
+
+              2'b01: begin
+                store_data_to_dmem[15:8] = m_store_data[7:0];
+                store_we_to_dmem = 4'b0010;
+              end 
+
+              2'b10: begin
+                store_data_to_dmem[23:16] = m_store_data[7:0];
+                store_we_to_dmem = 4'b0100;
+              end 
+
+              2'b11: begin
+                store_data_to_dmem[31:24] = m_store_data[7:0];
+                store_we_to_dmem = 4'b1000;
+              end 
+            endcase
+          end else if (m_insn_sh) begin
+            case (memory_state.byte_offset[1])
+              1'b0: begin
+                store_data_to_dmem[15:0] = m_store_data[15:0];
+                store_we_to_dmem = 4'b0011;
+              end 
+
+              1'b1: begin
+                store_data_to_dmem[31:16] = m_store_data[15:0];
+                store_we_to_dmem = 4'b1100;
+              end 
+            endcase
+          end else if (m_insn_sw) begin
+            store_data_to_dmem[31:0] = m_store_data[31:0];
+            store_we_to_dmem = 4'b1111;
+          end
+        end
+
+        default: begin 
+
+        end
+    endcase
+  end
+
 
   /****************/
   /*WRITEBACK STAGE**/
@@ -684,8 +851,7 @@ module DatapathPipelined (
       writeback_state <= '{
           pc: memory_state.pc,
           insn: memory_state.insn,
-          rd_data:
-          memory_state.rd_data, // TODO: this will need to change once you compute the actual value to write back
+          rd_data: (memory_state.insn[6:0] == OpLoad) ? m_load_data : memory_state.rd_data, 
           rd: memory_state.rd,
           we: memory_state.we,
           cycle_status: memory_state.cycle_status
