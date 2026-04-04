@@ -144,8 +144,9 @@ module DatapathPipelined (
       f_pc_current   <= 32'd0;
       // NB: use CYCLE_NO_STALL since this is the value that will persist after the last reset cycle
       f_cycle_status <= CYCLE_NO_STALL;
-    end else if (load_use_stall) begin //do not move program counter at stall
-      
+    end else
+    if (load_use_stall || div_stall) begin  //do not move program counter at stall
+
     end else begin
       f_cycle_status <= CYCLE_NO_STALL;
       f_pc_current   <= branch_taken ? branch_target : f_pc_current + 4;
@@ -176,7 +177,8 @@ module DatapathPipelined (
       decode_state <= '{pc: 0, insn: 0, cycle_status: CYCLE_RESET};
     end else if (branch_taken) begin
       decode_state <= '{default: 0, cycle_status: CYCLE_TAKEN_BRANCH};
-    end else if (load_use_stall) begin //do not update on load use stall
+    end else
+    if (load_use_stall || div_stall) begin  //do not update on load use stall
 
     end else begin
       begin
@@ -248,8 +250,37 @@ module DatapathPipelined (
 
   wire [`REG_SIZE] rs1_data_wd = (writeback_state.we && writeback_state.rd != 0 && writeback_state.rd == insn_rs1) ? writeback_state.rd_data : rs1_data; //WD bypass
   wire [`REG_SIZE] rs2_data_wd = (writeback_state.we && writeback_state.rd != 0 && writeback_state.rd == insn_rs2) ? writeback_state.rd_data : rs2_data;
-  
-  wire load_use_stall = (execute_state.insn[6:0] == OpLoad) && (execute_state.rd != 0) && (execute_state.rd == insn_rs2 || ((execute_state.rd == insn_rs1) && insn_opcode != OpStore)); 
+
+wire insn_uses_rs2 = (insn_opcode == OpRegReg) 
+                  || (insn_opcode == OpStore) 
+                  || (insn_opcode == OpBranch);
+
+wire load_use_stall = (execute_state.insn[6:0] == OpLoad)
+                      && (execute_state.rd != 0)
+                      && ((insn_rs1 == execute_state.rd)
+                       || (insn_opcode != OpStore && insn_uses_rs2 && insn_rs2 == execute_state.rd));
+
+  wire d_insn_div    = insn_opcode == OpRegReg && decode_state.insn[31:25] == 7'd1 && decode_state.insn[14:12] == 3'b100;
+  wire d_insn_divu   = insn_opcode == OpRegReg && decode_state.insn[31:25] == 7'd1 && decode_state.insn[14:12] == 3'b101;
+  wire d_insn_rem    = insn_opcode == OpRegReg && decode_state.insn[31:25] == 7'd1 && decode_state.insn[14:12] == 3'b110;
+  wire d_insn_remu   = insn_opcode == OpRegReg && decode_state.insn[31:25] == 7'd1 && decode_state.insn[14:12] == 3'b111;
+
+  logic div_stall;
+  always_comb begin
+    // if insn is not a div and div in progress, stall.
+    div_stall = (d_insn_div || d_insn_divu || d_insn_rem || d_insn_remu) ? 0 : div_in_progress;
+
+    // if insn is a div and div in progress, stall if current div is dependent on a div in the divider
+    for (int i = 0; i < `DIVIDER_STAGES-2; i++) begin
+      if (div_pipe[i].valid && ((div_pipe[i].rd == insn_rs1) || (div_pipe[i].rd == insn_rs2))) begin
+        div_stall |= 1'b1;
+      end
+    end
+    // also check if its dependent on teh current div in execute but not yet latched into div pipe
+    if (div_in_progress && ((execute_state.rd == insn_rs1) || (execute_state.rd == insn_rs2))) begin
+      div_stall |= 1'b1;
+    end
+  end
 
   /****************/
   /*EXECUTE STAGE**/
@@ -278,6 +309,8 @@ module DatapathPipelined (
       execute_state <= '{default: 0, cycle_status: CYCLE_TAKEN_BRANCH};
     end else if (load_use_stall) begin
       execute_state <= '{default: 0, cycle_status: CYCLE_LOAD2USE};
+    end else if (div_stall) begin
+      execute_state <= '{default: 0, cycle_status: CYCLE_DIV};
     end else begin
       execute_state <= '{
           pc: decode_state.pc,
@@ -410,6 +443,67 @@ module DatapathPipelined (
       .o_quotient(div_quotient)
   );
 
+  typedef enum logic [1:0] {
+    DIV_OP_DIV,
+    DIV_OP_DIVU,
+    DIV_OP_REM,
+    DIV_OP_REMU
+  } div_op_e;
+
+  typedef struct packed {
+    logic valid;
+    logic [`REG_SIZE] rs1_data;
+    logic is_rs2_neg;
+    logic is_overflow;
+    logic is_div_zero;
+    logic [4:0] rd;
+    logic [`REG_SIZE] pc;
+    logic [`INSN_SIZE] insn;
+    div_op_e div_op;
+    cycle_status_e cycle_status;
+
+  } div_pipe_t;
+
+  div_pipe_t div_pipe[7];
+  logic div_in_progress;
+
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      for (int i = 0; i < `DIVIDER_STAGES-1; i++) begin
+        div_pipe[i] <= '{default: 0, cycle_status: CYCLE_DIV, div_op: DIV_OP_DIV};
+      end
+    end else begin
+      // shift pipeline
+      for (int i = `DIVIDER_STAGES - 2; i > 0; i--) begin
+        div_pipe[i] <= div_pipe[i-1];
+      end
+      // insert new value into pipeline
+      div_pipe[0] <= '{
+          valid: x_insn_div || x_insn_divu || x_insn_rem || x_insn_remu,
+          rs1_data: x_rs1_data,
+          is_rs2_neg: x_insn_div || x_insn_rem ? x_rs2_data[31] : 1'b0,
+          is_overflow: (x_insn_div || x_insn_rem)
+                       && x_rs1_data == 32'h80000000
+                       && x_rs2_data == 32'hFFFFFFFF ? 1'b1 : 1'b0,
+          div_op: x_insn_divu ? DIV_OP_DIVU :
+                  x_insn_rem  ? DIV_OP_REM  :
+                  x_insn_remu ? DIV_OP_REMU : DIV_OP_DIV,
+          is_div_zero: x_rs2_data == 32'b0 ? 1'b1 : 1'b0,
+          rd: execute_state.rd,
+          pc: execute_state.pc,
+          insn: execute_state.insn,
+          cycle_status: execute_state.cycle_status
+      };
+    end
+  end
+
+  always_comb begin
+    div_in_progress = x_insn_div || x_insn_divu || x_insn_rem || x_insn_remu;
+    for (int i = 0; i < `DIVIDER_STAGES-2; i++) begin
+      div_in_progress |= div_pipe[i].valid;
+    end
+  end
+
   // MX bypass
   assign x_rs1_data = (memory_state.we && memory_state.rd != 0 && memory_state.rd == execute_state.rs1) ? memory_state.rd_data :
                     (writeback_state.we && writeback_state.rd != 0 && writeback_state.rd == execute_state.rs1) ? writeback_state.rd_data :
@@ -510,9 +604,9 @@ module DatapathPipelined (
           alu_result = prod[63:32];
         end else if (x_insn_div) begin
           if (x_rs2_data == 32'b0) begin
-            alu_result = 32'hFFFFFFFF;
+            // alu_result = 32'hFFFFFFFF;
           end else if (x_rs1_data == 32'h80000000 && x_rs2_data == 32'hFFFFFFFF) begin
-            alu_result = 32'h80000000;
+            // alu_result = 32'h80000000;
           end else begin
             div_a = x_rs1_data[31] ? (~x_rs1_data + 1) : x_rs1_data;
             div_b = x_rs2_data[31] ? (~x_rs2_data + 1) : x_rs2_data;
@@ -520,21 +614,20 @@ module DatapathPipelined (
             div_dividend = div_a;
             div_divisor = div_b;
 
-            if (x_rs1_data[31] != x_rs2_data[31]) begin
-              alu_result = ~div_quotient + 1;
-            end else begin
-              alu_result = div_quotient;
-            end
+            // if (x_rs1_data[31] != x_rs2_data[31]) begin
+            //   alu_result = ~div_quotient + 1;
+            // end else begin
+            //   alu_result = div_quotient;
+            // end
           end
         end else if (x_insn_divu) begin
           div_dividend = x_rs1_data;
           div_divisor  = $unsigned(x_rs2_data);
-          alu_result   = div_quotient;
         end else if (x_insn_rem) begin
           if (x_rs2_data == 32'b0) begin
-            alu_result = x_rs1_data;
+            // alu_result = x_rs1_data;
           end else if (x_rs1_data == 32'h80000000 && x_rs2_data == 32'hFFFFFFFF) begin
-            alu_result = 0;
+            // alu_result = 0;
           end else begin
             div_a = x_rs1_data[31] ? (~x_rs1_data + 1) : x_rs1_data;
             div_b = x_rs2_data[31] ? (~x_rs2_data + 1) : x_rs2_data;
@@ -542,16 +635,16 @@ module DatapathPipelined (
             div_dividend = div_a;
             div_divisor = div_b;
 
-            if (x_rs1_data[31]) begin
-              alu_result = ~div_remainder + 1;
-            end else begin
-              alu_result = div_remainder;
-            end
+            // if (x_rs1_data[31]) begin
+            //   alu_result = ~div_remainder + 1;
+            // end else begin
+            //   alu_result = div_remainder;
+            // end
           end
         end else if (x_insn_remu) begin
           div_dividend = x_rs1_data;
           div_divisor  = $unsigned(x_rs2_data);
-          alu_result   = div_remainder;
+          // alu_result   = div_remainder;
         end
       end
 
@@ -629,6 +722,40 @@ module DatapathPipelined (
         illegal_insn = 1'b1;
       end
     endcase
+
+    if (div_pipe[6].valid) begin
+      case (div_pipe[6].div_op)
+        DIV_OP_DIV: begin
+          if (div_pipe[6].is_div_zero)
+            alu_result = 32'hFFFFFFFF;
+          else if (div_pipe[6].is_overflow)
+            alu_result = 32'h80000000;
+          else
+            alu_result = (div_pipe[6].is_rs2_neg ^ div_pipe[6].rs1_data[31])
+                        ? ~div_quotient + 1 : div_quotient;
+        end
+        DIV_OP_DIVU: begin
+          if (div_pipe[6].is_div_zero)
+            alu_result = 32'hFFFFFFFF;
+          else
+            alu_result = div_quotient; 
+        end
+        DIV_OP_REM: begin
+          if (div_pipe[6].is_div_zero)
+            alu_result = div_pipe[6].rs1_data;
+          else if (div_pipe[6].is_overflow)
+            alu_result = 32'h0;
+          else
+            alu_result = div_pipe[6].rs1_data[31] ? ~div_remainder + 1 : div_remainder;
+        end
+        DIV_OP_REMU: begin
+          if (div_pipe[6].is_div_zero)
+            alu_result = div_pipe[6].rs1_data; 
+          else
+            alu_result = div_remainder;
+        end
+      endcase
+    end
   end
 
   /****************/
@@ -652,6 +779,18 @@ module DatapathPipelined (
   always_ff @(posedge clk) begin
     if (rst) begin
       memory_state <= '{default: 0, cycle_status: CYCLE_RESET};
+    end else if (div_pipe[6].valid) begin
+      memory_state <= '{
+          default: 0,
+          pc: div_pipe[6].pc,
+          insn: div_pipe[6].insn,
+          rd_data: alu_result,
+          rd: div_pipe[6].rd,
+          we: 1'b1,
+          cycle_status: div_pipe[6].cycle_status
+      };
+    end else if (div_in_progress) begin
+      memory_state <= '{default: 0, cycle_status: CYCLE_DIV};
     end else begin
       memory_state <= '{
           pc: execute_state.pc,
@@ -696,7 +835,7 @@ module DatapathPipelined (
 
   wire is_writeback_load = (writeback_state.insn[6:0] == OpLoad);
   wire [`REG_SIZE] m_store_data = (is_writeback_load && writeback_state.rd != 0 && writeback_state.rd == m_insn_rs2) ? writeback_state.rd_data : memory_state.rs2_data; //WM bypass
-  logic  [`REG_SIZE] m_load_data;
+  logic [`REG_SIZE] m_load_data;
 
   always_comb begin
     addr_to_dmem = memory_state.addr;
@@ -707,124 +846,124 @@ module DatapathPipelined (
     m_load_data = 32'b0;
 
     case (m_insn_opcode)
-     OpLoad: begin 
-          if (m_insn_lb) begin
-            case (memory_state.byte_offset[1:0])
-              2'b00: begin
-                b = load_data_from_dmem[7:0];
-              end
+      OpLoad: begin
+        if (m_insn_lb) begin
+          case (memory_state.byte_offset[1:0])
+            2'b00: begin
+              b = load_data_from_dmem[7:0];
+            end
 
-              2'b01: begin
-                b = load_data_from_dmem[15:8];
-              end
+            2'b01: begin
+              b = load_data_from_dmem[15:8];
+            end
 
-              2'b10: begin
-                b = load_data_from_dmem[23:16];
-              end
+            2'b10: begin
+              b = load_data_from_dmem[23:16];
+            end
 
-              2'b11: begin
-                b = load_data_from_dmem[31:24];
-              end
-            endcase
+            2'b11: begin
+              b = load_data_from_dmem[31:24];
+            end
+          endcase
 
-            m_load_data = {{24{b[7]}},b};
+          m_load_data = {{24{b[7]}}, b};
 
-          end else if(m_insn_lbu) begin
-            case (memory_state.byte_offset[1:0])
-              2'b00: begin
-                b = load_data_from_dmem[7:0];
-              end
+        end else if (m_insn_lbu) begin
+          case (memory_state.byte_offset[1:0])
+            2'b00: begin
+              b = load_data_from_dmem[7:0];
+            end
 
-              2'b01: begin
-                b = load_data_from_dmem[15:8];
-              end
+            2'b01: begin
+              b = load_data_from_dmem[15:8];
+            end
 
-              2'b10: begin
-                b = load_data_from_dmem[23:16];
-              end
+            2'b10: begin
+              b = load_data_from_dmem[23:16];
+            end
 
-              2'b11: begin
-                b = load_data_from_dmem[31:24];
-              end
-            endcase
+            2'b11: begin
+              b = load_data_from_dmem[31:24];
+            end
+          endcase
 
-            m_load_data = {{24{1'b0}},b};
+          m_load_data = {{24{1'b0}}, b};
 
-          end else if (m_insn_lh) begin
-            case (memory_state.byte_offset[1])
-              1'b0: begin
-                h = load_data_from_dmem[15:0];
-              end
+        end else if (m_insn_lh) begin
+          case (memory_state.byte_offset[1])
+            1'b0: begin
+              h = load_data_from_dmem[15:0];
+            end
 
-              1'b1: begin
-                h = load_data_from_dmem[31:16];
-              end
-            endcase
+            1'b1: begin
+              h = load_data_from_dmem[31:16];
+            end
+          endcase
 
-            m_load_data = {{16{h[15]}},h};
-          end else if (m_insn_lhu) begin
-            case (memory_state.byte_offset[1])
-              1'b0: begin
-                h = load_data_from_dmem[15:0];
-              end
+          m_load_data = {{16{h[15]}}, h};
+        end else if (m_insn_lhu) begin
+          case (memory_state.byte_offset[1])
+            1'b0: begin
+              h = load_data_from_dmem[15:0];
+            end
 
-              1'b1: begin
-                h = load_data_from_dmem[31:16];
-              end
-            endcase
+            1'b1: begin
+              h = load_data_from_dmem[31:16];
+            end
+          endcase
 
-            m_load_data = {{16{1'b0}},h};
-          end else if (m_insn_lw) begin
-            m_load_data = load_data_from_dmem;
-          end
-
-
+          m_load_data = {{16{1'b0}}, h};
+        end else if (m_insn_lw) begin
+          m_load_data = load_data_from_dmem;
         end
 
-        OpStore: begin
-          if (m_insn_sb) begin
-            case (memory_state.byte_offset[1:0])
-              2'b00: begin
-                store_data_to_dmem[7:0] = m_store_data[7:0];
-                store_we_to_dmem = 4'b0001;
-              end 
 
-              2'b01: begin
-                store_data_to_dmem[15:8] = m_store_data[7:0];
-                store_we_to_dmem = 4'b0010;
-              end 
+      end
 
-              2'b10: begin
-                store_data_to_dmem[23:16] = m_store_data[7:0];
-                store_we_to_dmem = 4'b0100;
-              end 
+      OpStore: begin
+        if (m_insn_sb) begin
+          case (memory_state.byte_offset[1:0])
+            2'b00: begin
+              store_data_to_dmem[7:0] = m_store_data[7:0];
+              store_we_to_dmem = 4'b0001;
+            end
 
-              2'b11: begin
-                store_data_to_dmem[31:24] = m_store_data[7:0];
-                store_we_to_dmem = 4'b1000;
-              end 
-            endcase
-          end else if (m_insn_sh) begin
-            case (memory_state.byte_offset[1])
-              1'b0: begin
-                store_data_to_dmem[15:0] = m_store_data[15:0];
-                store_we_to_dmem = 4'b0011;
-              end 
+            2'b01: begin
+              store_data_to_dmem[15:8] = m_store_data[7:0];
+              store_we_to_dmem = 4'b0010;
+            end
 
-              1'b1: begin
-                store_data_to_dmem[31:16] = m_store_data[15:0];
-                store_we_to_dmem = 4'b1100;
-              end 
-            endcase
-          end else if (m_insn_sw) begin
-            store_data_to_dmem[31:0] = m_store_data[31:0];
-            store_we_to_dmem = 4'b1111;
-          end
+            2'b10: begin
+              store_data_to_dmem[23:16] = m_store_data[7:0];
+              store_we_to_dmem = 4'b0100;
+            end
+
+            2'b11: begin
+              store_data_to_dmem[31:24] = m_store_data[7:0];
+              store_we_to_dmem = 4'b1000;
+            end
+          endcase
+        end else if (m_insn_sh) begin
+          case (memory_state.byte_offset[1])
+            1'b0: begin
+              store_data_to_dmem[15:0] = m_store_data[15:0];
+              store_we_to_dmem = 4'b0011;
+            end
+
+            1'b1: begin
+              store_data_to_dmem[31:16] = m_store_data[15:0];
+              store_we_to_dmem = 4'b1100;
+            end
+          endcase
+        end else if (m_insn_sw) begin
+          store_data_to_dmem[31:0] = m_store_data[31:0];
+          store_we_to_dmem = 4'b1111;
         end
+      end
 
-        default: begin 
+      default: begin
 
-        end
+      end
     endcase
   end
 
@@ -851,7 +990,7 @@ module DatapathPipelined (
       writeback_state <= '{
           pc: memory_state.pc,
           insn: memory_state.insn,
-          rd_data: (memory_state.insn[6:0] == OpLoad) ? m_load_data : memory_state.rd_data, 
+          rd_data: (memory_state.insn[6:0] == OpLoad) ? m_load_data : memory_state.rd_data,
           rd: memory_state.rd,
           we: memory_state.we,
           cycle_status: memory_state.cycle_status
